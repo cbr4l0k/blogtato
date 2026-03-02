@@ -12,8 +12,9 @@ use crate::store::Store;
 use super::{feed_index, post_index};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum GroupKey {
+pub(crate) enum GroupKey {
     Date,
+    Week,
     Feed,
 }
 
@@ -21,6 +22,7 @@ impl GroupKey {
     fn extract(&self, item: &FeedItem, feed_labels: &HashMap<String, String>) -> String {
         match self {
             GroupKey::Date => format_date(item),
+            GroupKey::Week => format_week(item),
             GroupKey::Feed => feed_labels
                 .get(&item.feed)
                 .cloned()
@@ -35,7 +37,9 @@ impl GroupKey {
         feed_labels: &HashMap<String, String>,
     ) -> std::cmp::Ordering {
         match self {
-            GroupKey::Date => format_date(b).cmp(&format_date(a)),
+            GroupKey::Date | GroupKey::Week => self
+                .extract(b, feed_labels)
+                .cmp(&self.extract(a, feed_labels)),
             GroupKey::Feed => self
                 .extract(a, feed_labels)
                 .cmp(&self.extract(b, feed_labels)),
@@ -46,6 +50,12 @@ impl GroupKey {
 fn format_date(item: &FeedItem) -> String {
     item.date
         .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn format_week(item: &FeedItem) -> String {
+    item.date
+        .map(|d| d.format("%G-W%V").to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -273,22 +283,20 @@ fn render_grouped(
     out
 }
 
-fn parse_grouping(arg: &str) -> Option<Vec<GroupKey>> {
-    arg.chars()
-        .map(|c| match c {
-            'd' => Some(GroupKey::Date),
-            'f' => Some(GroupKey::Feed),
-            _ => None,
-        })
-        .collect()
+pub(crate) fn parse_group_arg(arg: &str) -> anyhow::Result<GroupKey> {
+    match arg {
+        "/d" => Ok(GroupKey::Date),
+        "/w" => Ok(GroupKey::Week),
+        "/f" => Ok(GroupKey::Feed),
+        _ => bail!("Unknown grouping: {arg}. Available: /d (date), /w (week), /f (feed)"),
+    }
 }
 
-pub(crate) fn cmd_show(store: &Store, group: &str, filter: Option<&str>) -> anyhow::Result<()> {
-    let keys = match parse_grouping(group) {
-        Some(keys) => keys,
-        None => bail!("Unknown grouping: {}. Use: d, f, df, fd", group),
-    };
-
+pub(crate) fn cmd_show(
+    store: &Store,
+    keys: &[GroupKey],
+    filter: Option<&str>,
+) -> anyhow::Result<()> {
     let fi = feed_index(store.feeds());
 
     let filter_feed_id = match filter {
@@ -333,7 +341,7 @@ pub(crate) fn cmd_show(store: &Store, group: &str, filter: Option<&str>) -> anyh
         "{}",
         render_grouped(
             &refs,
-            &keys,
+            keys,
             &posts.shorthands,
             &feed_labels,
             color,
@@ -369,44 +377,18 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_grouping_empty() {
-        assert_eq!(parse_grouping(""), Some(vec![]));
+    fn test_parse_group_arg_date() {
+        assert_eq!(parse_group_arg("/d").unwrap(), GroupKey::Date);
     }
 
     #[test]
-    fn test_parse_grouping_date() {
-        assert_eq!(parse_grouping("d"), Some(vec![GroupKey::Date]));
+    fn test_parse_group_arg_feed() {
+        assert_eq!(parse_group_arg("/f").unwrap(), GroupKey::Feed);
     }
 
     #[test]
-    fn test_parse_grouping_feed() {
-        assert_eq!(parse_grouping("f"), Some(vec![GroupKey::Feed]));
-    }
-
-    #[test]
-    fn test_parse_grouping_date_feed() {
-        assert_eq!(
-            parse_grouping("df"),
-            Some(vec![GroupKey::Date, GroupKey::Feed])
-        );
-    }
-
-    #[test]
-    fn test_parse_grouping_feed_date() {
-        assert_eq!(
-            parse_grouping("fd"),
-            Some(vec![GroupKey::Feed, GroupKey::Date])
-        );
-    }
-
-    #[test]
-    fn test_parse_grouping_invalid() {
-        assert_eq!(parse_grouping("x"), None);
-    }
-
-    #[test]
-    fn test_parse_grouping_partially_invalid() {
-        assert_eq!(parse_grouping("dx"), None);
+    fn test_parse_group_arg_invalid() {
+        assert!(parse_group_arg("/x").is_err());
     }
 
     #[test]
