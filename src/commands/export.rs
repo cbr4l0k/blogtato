@@ -23,25 +23,20 @@ pub(crate) fn cmd_export(store: &BlogData, query: &Query) -> anyhow::Result<()> 
     let query = query.or_default_view();
     let resolved = resolve_posts(store, &query)?;
 
-    let feeds_by_id: HashMap<String, FeedSource> = store
+    let feeds_by_id: HashMap<String, &FeedSource> = store
         .feeds()
-        .items()
-        .into_iter()
-        .map(|f| {
-            let id = store.feeds().id_of(&f);
-            (id, f)
-        })
+        .iter()
+        .map(|(id, feed)| (id.to_string(), feed))
         .collect();
 
     let reads: HashMap<String, DateTime<Utc>> = store
         .reads()
-        .items()
-        .into_iter()
-        .map(|r| (r.post_id, r.read_at))
+        .iter()
+        .map(|(_, r)| (r.post_id.clone(), r.read_at))
         .collect();
 
     for item in &resolved.items {
-        if let Some(feed) = feeds_by_id.get(&item.feed) {
+        if let Some(&feed) = feeds_by_id.get(&item.feed) {
             let export = ExportItem {
                 title: &item.title,
                 date: item.date.as_ref(),

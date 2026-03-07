@@ -462,6 +462,13 @@ impl<T: TableRow> Table<T> {
             })
             .collect()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &T)> {
+        self.items.values().filter_map(|r| match r {
+            Row::Live { id, inner, .. } => Some((id.as_str(), inner)),
+            Row::Tombstone { .. } => None,
+        })
+    }
 }
 
 #[macro_export]

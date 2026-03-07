@@ -29,15 +29,17 @@ impl FeedIndex {
 }
 
 pub(crate) fn feed_index(table: &synctato::Table<FeedSource>) -> FeedIndex {
-    let mut feeds = table.items();
-    feeds.sort_by(|a, b| a.url.cmp(&b.url));
-    let ids: Vec<String> = feeds.iter().map(|f| table.id_of(f)).collect();
+    let mut pairs: Vec<(String, FeedSource)> = table
+        .iter()
+        .map(|(id, feed)| (id.to_string(), feed.clone()))
+        .collect();
+    pairs.sort_by(|(_, a), (_, b)| a.url.cmp(&b.url));
+    let ids: Vec<String> = pairs.iter().map(|(id, _)| id.clone()).collect();
     let shorthands = compute_shorthands(&ids);
-    let entries = feeds
+    let entries = pairs
         .into_iter()
-        .zip(ids)
         .zip(shorthands)
-        .map(|((feed, id), shorthand)| FeedEntry {
+        .map(|((id, feed), shorthand)| FeedEntry {
             feed,
             id,
             shorthand,

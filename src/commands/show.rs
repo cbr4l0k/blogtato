@@ -16,9 +16,8 @@ pub(crate) fn cmd_show(store: &BlogData, query: &Query) -> anyhow::Result<()> {
 
     let read_ids: HashSet<String> = store
         .reads()
-        .items()
-        .into_iter()
-        .map(|r| r.post_id)
+        .iter()
+        .map(|(_, r)| r.post_id.clone())
         .collect();
 
     let color = std::io::stdout().is_terminal();
