@@ -6,6 +6,38 @@ use crate::query::GroupKey;
 use super::RenderCtx;
 
 const READ_MARKER_WIDTH: usize = 2; // "* " or "  "
+const META_PAREN_WIDTH: usize = 3; // " (" + ")"
+const META_TAG_SPACE: usize = 1; // space between tag and blog name
+
+struct Style {
+    bold: &'static str,
+    dim: &'static str,
+    italic: &'static str,
+    date_color: &'static str,
+    reset: &'static str,
+}
+
+impl Style {
+    fn new(color: bool) -> Self {
+        if color {
+            Self {
+                bold: "\x1b[1m",
+                dim: "\x1b[2m",
+                italic: "\x1b[3m",
+                date_color: "\x1b[36m",
+                reset: "\x1b[0m",
+            }
+        } else {
+            Self {
+                bold: "",
+                dim: "",
+                italic: "",
+                date_color: "",
+                reset: "",
+            }
+        }
+    }
+}
 
 pub(crate) fn format_date(item: &FeedItem) -> String {
     item.date
@@ -32,6 +64,55 @@ fn truncate_str(s: &str, max_cols: usize) -> String {
         end = i + c.len_utf8();
     }
     format!("{}\u{2026}", &s[..end])
+}
+
+/// Split a feed label like "@tag Blog Name" into (Some("@tag"), "Blog Name").
+/// Labels without an @-tag return (None, full_label).
+fn resolve_feed_label(feed_label: &str) -> (Option<&str>, &str) {
+    match feed_label.split_once(' ') {
+        Some((t, b)) if t.starts_with('@') => (Some(t), b),
+        _ => (None, feed_label),
+    }
+}
+
+/// Fixed-width overhead from the meta suffix " (@tag BlogName)" or " (BlogName)".
+fn meta_fixed_width(tag: Option<&str>) -> usize {
+    match tag {
+        Some(t) => META_PAREN_WIDTH + t.width() + META_TAG_SPACE,
+        None => META_PAREN_WIDTH,
+    }
+}
+
+/// Decide how much space title and blog name each get, truncating if needed.
+fn budget_title_and_blog(
+    title: &str,
+    blog_name: &str,
+    show_feed: bool,
+    content_width: Option<usize>,
+    fixed_width: usize,
+    meta_width: usize,
+) -> (String, String) {
+    match content_width {
+        Some(w) if fixed_width + meta_width < w => {
+            let remaining = w - fixed_width - meta_width;
+            let title_len = title.width();
+            let blog_len = blog_name.width();
+
+            if title_len + blog_len <= remaining {
+                (title.to_string(), blog_name.to_string())
+            } else if !show_feed {
+                (truncate_str(title, remaining), String::new())
+            } else {
+                let blog_budget = (remaining * 35 / 100).max(3).min(blog_len);
+                let title_budget = remaining.saturating_sub(blog_budget);
+                (
+                    truncate_str(title, title_budget),
+                    truncate_str(blog_name, blog_budget),
+                )
+            }
+        }
+        _ => (title.to_string(), blog_name.to_string()),
+    }
 }
 
 pub(super) fn format_item(
@@ -61,62 +142,35 @@ pub(super) fn format_item(
     let fixed_width = READ_MARKER_WIDTH + date_width + ctx.shorthand_width + 1;
 
     let (tag, blog_name) = if show_feed {
-        match feed_label.split_once(' ') {
-            Some((t, b)) if t.starts_with('@') => (Some(t), b),
-            _ => (None, feed_label),
-        }
+        resolve_feed_label(feed_label)
     } else {
         (None, "")
     };
 
-    let meta_fixed_width = if show_feed {
-        match tag {
-            Some(t) => 2 + t.width() + 1 + 1,
-            None => 2 + 1,
-        }
-    } else {
-        0
-    };
+    let meta_width = if show_feed { meta_fixed_width(tag) } else { 0 };
 
-    let (title, blog) = match content_width {
-        Some(w) if fixed_width + meta_fixed_width < w => {
-            let remaining = w - fixed_width - meta_fixed_width;
-            let title_len = item.title.width();
-            let blog_len = blog_name.width();
+    let (title, blog) = budget_title_and_blog(
+        &item.title,
+        blog_name,
+        show_feed,
+        content_width,
+        fixed_width,
+        meta_width,
+    );
 
-            if title_len + blog_len <= remaining {
-                (item.title.clone(), blog_name.to_string())
-            } else if !show_feed {
-                (truncate_str(&item.title, remaining), String::new())
-            } else {
-                let blog_budget = (remaining * 35 / 100).max(3).min(blog_len);
-                let title_budget = remaining.saturating_sub(blog_budget);
-                (
-                    truncate_str(&item.title, title_budget),
-                    truncate_str(blog_name, blog_budget),
-                )
-            }
-        }
-        _ => (item.title.clone(), blog_name.to_string()),
-    };
-
-    let (bold, dim, italic, date_color, reset) = if ctx.color {
-        ("\x1b[1m", "\x1b[2m", "\x1b[3m", "\x1b[36m", "\x1b[0m")
-    } else {
-        ("", "", "", "", "")
-    };
+    let s = Style::new(ctx.color);
 
     let styled_meta = if show_feed {
         match tag {
-            Some(t) => format!("{dim}{italic} ({t} {blog}){reset}"),
-            None => format!("{dim}{italic} ({blog}){reset}"),
+            Some(t) => format!("{}{} ({t} {blog}){}", s.dim, s.italic, s.reset),
+            None => format!("{}{} ({blog}){}", s.dim, s.italic, s.reset),
         }
     } else {
         String::new()
     };
 
     let date_part = if show_date {
-        format!("{date_color}{}{reset}  ", format_date(item))
+        format!("{}{}{}  ", s.date_color, format_date(item), s.reset)
     } else {
         String::new()
     };
@@ -124,7 +178,9 @@ pub(super) fn format_item(
     let read_marker = if is_read { "  " } else { "* " };
 
     format!(
-        "{read_marker}{date_part}{bold}{shorthand:<sw$}{reset} {title}{styled_meta}",
+        "{read_marker}{date_part}{}{shorthand:<sw$}{} {title}{styled_meta}",
+        s.bold,
+        s.reset,
         sw = ctx.shorthand_width
     )
 }
