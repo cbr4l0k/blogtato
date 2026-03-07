@@ -14,11 +14,17 @@ pub(crate) struct FeedIndex {
 }
 
 impl FeedIndex {
+    fn find_by_shorthand(&self, shorthand: &str) -> Option<&FeedEntry> {
+        self.entries.iter().find(|e| e.shorthand == shorthand)
+    }
+
     pub(crate) fn id_for_shorthand(&self, shorthand: &str) -> Option<&str> {
-        self.entries
-            .iter()
-            .find(|e| e.shorthand == shorthand)
-            .map(|e| e.id.as_str())
+        self.find_by_shorthand(shorthand).map(|e| e.id.as_str())
+    }
+
+    pub(crate) fn url_for_shorthand(&self, shorthand: &str) -> Option<&str> {
+        self.find_by_shorthand(shorthand)
+            .map(|e| e.feed.url.as_str())
     }
 }
 
@@ -44,11 +50,9 @@ pub(crate) fn resolve_shorthand(
     feeds_table: &synctato::Table<FeedSource>,
     shorthand: &str,
 ) -> Option<String> {
-    let fi = feed_index(feeds_table);
-    fi.entries
-        .iter()
-        .find(|e| e.shorthand == shorthand)
-        .map(|e| e.feed.url.clone())
+    feed_index(feeds_table)
+        .url_for_shorthand(shorthand)
+        .map(|s| s.to_string())
 }
 
 pub(crate) fn build_feed_labels(fi: &FeedIndex) -> HashMap<String, String> {
