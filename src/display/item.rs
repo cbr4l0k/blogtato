@@ -8,6 +8,9 @@ use super::{RenderCtx, Style};
 const READ_MARKER_WIDTH: usize = 2; // "* " or "  "
 const META_PAREN_WIDTH: usize = 3; // " (" + ")"
 const META_TAG_SPACE: usize = 1; // space between tag and blog name
+/// Max share of remaining width allocated to the blog name when truncating.
+/// Keeps titles prominent while still showing enough of the blog name to identify it.
+const BLOG_NAME_BUDGET_PERCENT: usize = 35;
 
 pub(crate) fn format_date(item: &FeedItem) -> String {
     item.date
@@ -73,7 +76,9 @@ fn budget_title_and_blog(
             } else if !show_feed {
                 (truncate_str(title, remaining), String::new())
             } else {
-                let blog_budget = (remaining * 35 / 100).max(3).min(blog_len);
+                let blog_budget = (remaining * BLOG_NAME_BUDGET_PERCENT / 100)
+                    .max(3)
+                    .min(blog_len);
                 let title_budget = remaining.saturating_sub(blog_budget);
                 (
                     truncate_str(title, title_budget),
