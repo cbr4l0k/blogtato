@@ -123,18 +123,12 @@ fn split_at_command(args: Vec<String>) -> (Vec<String>, Vec<String>) {
         .iter()
         .position(|a| RESERVED_COMMANDS.contains(&a.as_str()));
     let split = cmd_pos.map(|p| p + 1).unwrap_or(args.len());
-    let filter = args[1..split]
+    let (flags, filter): (Vec<_>, Vec<_>) = args[1..split]
         .iter()
-        .filter(|a| !a.starts_with('-'))
         .cloned()
-        .collect();
+        .partition(|a| a.starts_with('-'));
     let mut cmd_args = vec![args[0].clone()];
-    cmd_args.extend(
-        args[1..split]
-            .iter()
-            .filter(|a| a.starts_with('-'))
-            .cloned(),
-    );
+    cmd_args.extend(flags);
     cmd_args.extend_from_slice(&args[split..]);
     (filter, cmd_args)
 }
