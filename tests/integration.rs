@@ -649,6 +649,55 @@ fn test_remove_feed_deletes_its_posts() {
 }
 
 #[test]
+fn test_remove_feed_cleans_up_read_marks() {
+    let ctx = TestContext::new();
+
+    let date_a = recent_rss_date(1);
+    let xml = rss_xml_with_links(
+        "Doomed Blog",
+        &[(
+            "Doomed Post",
+            &date_a,
+            "guid-doomed",
+            "https://example.com/doomed",
+        )],
+    );
+    ctx.mock_rss_feed("/doomed.xml", &xml);
+    let url = ctx.server.url("/doomed.xml");
+    ctx.write_feeds(&[&url]);
+    ctx.run(&["sync"]).success();
+
+    // Mark the post as read by opening it
+    #[allow(deprecated)]
+    Command::cargo_bin("blog")
+        .unwrap()
+        .args(["a", "open"])
+        .env("RSS_STORE", ctx.dir.path())
+        .env("BROWSER", "true")
+        .assert()
+        .success();
+
+    // Verify we have a read mark
+    let reads_before = read_table(&ctx.dir.path().join("reads"));
+    assert_eq!(
+        reads_before.len(),
+        1,
+        "expected 1 read mark before removal, got: {reads_before:?}"
+    );
+
+    // Now remove the feed
+    ctx.run(&["feed", "rm", &url]).success();
+
+    // Read marks for deleted posts should be cleaned up
+    let reads_after = read_table(&ctx.dir.path().join("reads"));
+    assert_eq!(
+        reads_after.len(),
+        0,
+        "expected 0 read marks after feed removal (orphaned ReadMarks), got: {reads_after:?}"
+    );
+}
+
+#[test]
 fn test_feed_ls() {
     let ctx = TestContext::new();
 
@@ -698,6 +747,28 @@ fn test_feed_ls_no_feeds_prints_error() {
         stderr.contains("No feeds found"),
         "expected 'No feeds found' on stderr, got: {}",
         stderr
+    );
+}
+
+#[test]
+fn test_trailing_slash_does_not_duplicate_feed() {
+    let ctx = TestContext::new();
+
+    let xml = rss_xml("Slash Blog", &[("Post", "Mon, 01 Jan 2024 00:00:00 +0000")]);
+    ctx.mock_rss_feed("/feed.xml", &xml);
+    ctx.mock_rss_feed("/feed.xml/", &xml);
+
+    let url = ctx.server.url("/feed.xml");
+    let url_slash = format!("{}/", url);
+
+    ctx.run(&["feed", "add", &url]).success();
+    ctx.run(&["feed", "add", &url_slash]).success();
+
+    let feeds = ctx.read_feeds();
+    assert_eq!(
+        feeds.len(),
+        1,
+        "trailing slash should not create a duplicate feed, got: {feeds:?}"
     );
 }
 
@@ -1166,6 +1237,18 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+/// Convert a filesystem path to a proper file:// URL.
+/// On Windows, backslashes are replaced with forward slashes and the path
+/// is prefixed with an extra `/` so `C:\foo` becomes `file:///C:/foo`.
+fn path_to_file_url(path: &Path) -> String {
+    let s = path.display().to_string().replace('\\', "/");
+    if s.starts_with('/') {
+        format!("file://{s}")
+    } else {
+        format!("file:///{s}")
+    }
+}
+
 fn git_config_test_user(dir: &Path) {
     git(dir, &["config", "user.name", "Test"]);
     git(dir, &["config", "user.email", "test@test.com"]);
@@ -1189,12 +1272,14 @@ fn insert_feed(store_dir: &Path, url: &str) {
         "description": "",
         "is_fetched": false
     });
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file_path)
-        .unwrap();
-    writeln!(file, "{}", entry).unwrap();
+    {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .unwrap();
+        writeln!(file, "{}", entry).unwrap();
+    } // file is dropped/flushed here before git add
 
     let git_check = std::process::Command::new("git")
         .args(["-C", &store_dir.to_string_lossy(), "rev-parse", "--git-dir"])
@@ -1213,12 +1298,7 @@ fn init_git_store(store_dir: &Path, origin_dir: &Path) {
     git_config_test_user(store_dir);
     git(
         store_dir,
-        &[
-            "remote",
-            "add",
-            "origin",
-            &format!("file://{}", origin_dir.display()),
-        ],
+        &["remote", "add", "origin", &path_to_file_url(origin_dir)],
     );
     // Make an initial commit so we have HEAD
     fs::write(store_dir.join(".keep"), "").unwrap();
@@ -1233,7 +1313,7 @@ fn clone_store(origin_dir: &Path) -> (TempDir, std::path::PathBuf) {
     let output = std::process::Command::new("git")
         .args([
             "clone",
-            &format!("file://{}", origin_dir.display()),
+            &path_to_file_url(origin_dir),
             &dir.path().to_string_lossy(),
         ])
         .output()
@@ -1308,7 +1388,7 @@ fn test_sync_first_push() {
             "remote",
             "add",
             "origin",
-            &format!("file://{}", origin_dir.path().display()),
+            &path_to_file_url(origin_dir.path()),
         ],
     );
 
@@ -1898,7 +1978,7 @@ fn test_clone_into_empty_dir() {
     // Create a temporary working repo, add data, push to origin
     let work_dir = TempDir::new().unwrap();
     std::process::Command::new("git")
-        .args(["clone", &format!("file://{}", origin_dir.path().display())])
+        .args(["clone", &path_to_file_url(origin_dir.path())])
         .arg(work_dir.path())
         .output()
         .unwrap();
@@ -1915,7 +1995,7 @@ fn test_clone_into_empty_dir() {
     #[allow(deprecated)]
     Command::cargo_bin("blog")
         .unwrap()
-        .args(["clone", &format!("file://{}", origin_dir.path().display())])
+        .args(["clone", &path_to_file_url(origin_dir.path())])
         .env("RSS_STORE", &target)
         .assert()
         .success();
@@ -1951,7 +2031,7 @@ fn test_clone_merges_with_existing_store() {
     // Clone into existing store — should add remote and merge
     run_blog(
         local_store.path(),
-        &["clone", &format!("file://{}", origin_dir.path().display())],
+        &["clone", &path_to_file_url(origin_dir.path())],
     )
     .success();
 

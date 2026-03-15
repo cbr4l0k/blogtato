@@ -8,11 +8,10 @@ use crate::utils::progress::spinner;
 const MAX_FEED_CANDIDATES: usize = 20;
 
 pub(crate) fn resolve_feed_url(url: &str) -> anyhow::Result<String> {
-    let client = crate::utils::http::http_client()?;
+    let client = crate::utils::http::http_client();
 
     let sp = spinner(&format!("Fetching {url}..."));
-    let response = client.get(url).send()?.error_for_status()?;
-    let bytes = response.bytes()?;
+    let bytes = client.get(url).call()?.body_mut().read_to_vec()?;
 
     // Try parsing as RSS/Atom — if it works, the URL is already a feed
     if is_feed_content(&bytes) {
@@ -24,18 +23,15 @@ pub(crate) fn resolve_feed_url(url: &str) -> anyhow::Result<String> {
     sp.set_message(format!("Looking for feeds on {url}..."));
     let html = String::from_utf8_lossy(&bytes);
     let base_url = url::Url::parse(url)?;
-    let candidates = feedfinder::detect_feeds(&base_url, &html)
-        .map_err(|e| anyhow::anyhow!("feed discovery failed: {e:?}"))?;
+    let candidates = crate::feed::discover::discover_feed_urls(&html, &base_url);
 
-    // Validate candidates by fetching and parsing each one, dedup by URL
-    let mut seen = std::collections::HashSet::new();
+    // Validate candidates by fetching and parsing each one
     let feeds: Vec<_> = candidates
-        .iter()
-        .filter(|f| seen.insert(f.url().to_string()))
+        .into_iter()
         .take(MAX_FEED_CANDIDATES)
-        .filter(|f| {
-            sp.set_message(format!("Checking {}...", f.url()));
-            is_valid_feed(&client, f.url().as_str())
+        .filter(|u| {
+            sp.set_message(format!("Checking {u}..."));
+            is_valid_feed(&client, u)
         })
         .collect();
 
@@ -43,15 +39,11 @@ pub(crate) fn resolve_feed_url(url: &str) -> anyhow::Result<String> {
 
     match feeds.len() {
         0 => bail!("no feeds found at {url}"),
-        1 => {
-            let feed_url = feeds[0].url().to_string();
-            Ok(feed_url)
-        }
+        1 => Ok(feeds.into_iter().next().unwrap()),
         _ => {
             eprintln!("Multiple feeds found at {url}:");
-            for feed in &feeds {
-                let title = feed.title().unwrap_or("(untitled)");
-                eprintln!("  {} — {title}", feed.url());
+            for feed_url in &feeds {
+                eprintln!("  {feed_url}");
             }
             bail!(
                 "multiple feeds found; run `blog feed add <feed-url>` with a specific URL from the list above"
@@ -64,19 +56,25 @@ fn is_feed_content(bytes: &[u8]) -> bool {
     crate::feed::rss::parse(bytes).is_ok() || crate::feed::atom::parse(bytes).is_ok()
 }
 
-fn is_valid_feed(client: &reqwest::blocking::Client, url: &str) -> bool {
-    let Ok(resp) = client.get(url).send().and_then(|r| r.error_for_status()) else {
+fn is_valid_feed(client: &ureq::Agent, url: &str) -> bool {
+    let Ok(mut resp) = client.get(url).call() else {
         return false;
     };
-    let Ok(bytes) = resp.bytes() else {
+    let Ok(bytes) = resp.body_mut().read_to_vec() else {
         return false;
     };
     is_feed_content(&bytes)
 }
 
+fn normalize_feed_url(url: &str) -> String {
+    url_normalize::normalize_url(url, &url_normalize::Options::default())
+        .unwrap_or_else(|_| url.to_string())
+}
+
 pub(crate) fn cmd_add(tx: &mut Transaction, url: &str) -> anyhow::Result<()> {
+    let url = normalize_feed_url(url);
     tx.feeds.upsert(FeedSource {
-        url: url.to_string(),
+        url,
         title: String::new(),
         site_url: String::new(),
         description: String::new(),
