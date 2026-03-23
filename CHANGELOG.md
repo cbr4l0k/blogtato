@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.21](https://github.com/kantord/blogtato/compare/v0.1.20...v0.1.21) - 2026-03-23
+
+### Fixed
+
+- *(deps)* update rust crate terminal_size to v0.4.4 ([#144](https://github.com/kantord/blogtato/pull/144))
+
 ## [0.1.20](https://github.com/kantord/blogtato/compare/v0.1.19...v0.1.20) - 2026-03-21
 
 ### Added
